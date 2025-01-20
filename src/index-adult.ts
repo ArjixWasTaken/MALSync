@@ -6,21 +6,30 @@ import { getPlayerTime } from './utils/player';
 import { pages } from './pages-adult/pages';
 import { oauth } from './utils/oauth';
 import { floatClick } from './floatbutton/userscript';
+import { anilistOauth } from './anilist/oauth';
 
 function main() {
-  if (window.location.href.indexOf('myanimelist.net') > -1) {
+  if (utils.isDomainMatching(window.location.href, 'myanimelist.net')) {
     // Do nothing
-  } else if (window.location.href.indexOf('anilist.co') > -1) {
+  } else if (utils.isDomainMatching(window.location.href, 'anilist.co')) {
     /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
     const anilist = new AnilistClass(window.location.href);
-  } else if (window.location.href.indexOf('kitsu.io') > -1) {
+  } else if (utils.isDomainMatching(window.location.href, 'kitsu.app')) {
     /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
     const kitsu = new KitsuClass(window.location.href);
-  } else if (window.location.href.indexOf('simkl.com') > -1) {
+  } else if (utils.isDomainMatching(window.location.href, 'simkl.com')) {
     /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
     const simkl = new SimklClass(window.location.href);
-  } else if (window.location.href.indexOf('malsync.moe/mal/oauth') > -1) {
+  } else if (
+    window.location.hostname === 'malsync.moe' &&
+    window.location.pathname === '/mal/oauth'
+  ) {
     oauth();
+  } else if (
+    window.location.hostname === 'malsync.moe' &&
+    window.location.pathname === '/anilist/oauth'
+  ) {
+    anilistOauth();
   } else {
     let page;
     try {

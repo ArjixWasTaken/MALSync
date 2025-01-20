@@ -1,16 +1,17 @@
 import { pageInterface, pageState } from './pageInterface';
 import { getSingle } from '../_provider/singleFactory';
-import { initFloatButton } from '../floatbutton/init';
+import { hideFloatbutton, initFloatButton, showFloatbutton } from '../floatbutton/init';
 import { providerTemplates } from '../provider/templates';
 import { fullscreenNotification, getPlayerTime } from '../utils/player';
 import { SearchClass } from '../_provider/Search/vueSearchClass';
 import { emitter } from '../utils/emitter';
 import { Cache } from '../utils/Cache';
 import { isIframeUrl } from '../utils/manifest';
-import { bloodTrail, Shark } from '../utils/shark';
-import { MissingDataError, MissingPlayerError } from '../utils/errors';
 import { NotFoundError, UrlNotSupportedError } from '../_provider/Errors';
 import { hasMissingPermissions } from '../utils/customDomains';
+import { localStore } from '../utils/localStore';
+import { MangaProgress } from '../utils/mangaProgress/MangaProgress';
+import { getPageConfig } from '../utils/test';
 
 declare let browser: any;
 
@@ -32,9 +33,15 @@ export class SyncPage {
 
   singleObj;
 
+  mangaProgress: MangaProgress | undefined;
+
   public novel = false;
 
   public strongVolumes = false;
+
+  public videoSyncOffset = true;
+
+  public videoSyncInterval;
 
   constructor(
     public url,
@@ -58,6 +65,11 @@ export class SyncPage {
       logger.info('Sync is disabled for this page', this.page.name);
       throw 'Stop Script';
     }
+
+    if (this.page.type === 'manga' && api.settings.get('readerTracking')) {
+      this.mangaProgress = new MangaProgress(this.page.sync.readerConfig || [], this.page.name);
+    }
+
     emitter.on('syncPage_fillUi', () => this.fillUI());
   }
 
@@ -89,33 +101,7 @@ export class SyncPage {
 
   private getPage(url) {
     if (this.pages.type) return this.pages;
-    for (const key in this.pages) {
-      const page = this.pages[key];
-      if (j.$.isArray(page.domain)) {
-        let resPage;
-        page.domain.forEach(singleDomain => {
-          if (checkDomain(singleDomain)) {
-            page.domain = singleDomain;
-            resPage = page;
-          }
-        });
-        if (resPage) return resPage;
-      } else if (checkDomain(page.domain)) {
-        return page;
-      }
-
-      function checkDomain(domain) {
-        if (
-          url.indexOf(
-            `${utils.urlPart(domain, 2).replace('.com.br', '.br').split('.').slice(-2, -1)[0]}.`,
-          ) > -1
-        ) {
-          return true;
-        }
-        return false;
-      }
-    }
-    return null;
+    return getPageConfig(url, this.pages);
   }
 
   private domainSet() {
@@ -151,9 +137,11 @@ export class SyncPage {
       if (progress < 100) {
         j.$('.ms-progress').css('width', `${progress}%`);
         j.$('#malSyncProgress').removeClass('ms-loading').removeClass('ms-done');
-      } else {
+      } else if (this.videoSyncOffset) {
         j.$('#malSyncProgress').addClass('ms-done');
         j.$('.flash.type-update .sync').click();
+      } else {
+        con.log('videoSyncOffset', progress);
       }
     }
     this.handleVideoResume(item, timeCb);
@@ -185,14 +173,14 @@ export class SyncPage {
     if (typeof this.curState.videoChecked !== 'undefined' && this.curState.videoChecked) {
       if (this.curState.videoChecked > 1 && item.current > 10) {
         logger.debug('Set Resume', item.current);
-        localStorage.setItem(localSelector, item.current);
+        localStore.setItem(localSelector, item.current);
         this.curState.videoChecked = true;
         setTimeout(() => {
           if (this.curState) this.curState.videoChecked = 2;
         }, 10000);
       }
     } else {
-      const localItem = localStorage.getItem(localSelector);
+      const localItem = localStore.getItem(localSelector);
       logger.info('Resume', localItem);
       if (
         localItem !== null &&
@@ -263,18 +251,34 @@ export class SyncPage {
     this.url = window.location.href;
     this.UILoaded = false;
     this.curState = undefined;
+    this.setSearchObj(undefined);
+    if (this.mangaProgress) this.mangaProgress.stop();
     $('#flashinfo-div, #flash-div-bottom, #flash-div-top, #malp').remove();
+  }
+
+  setSearchObj(searchObj) {
+    if (searchObj) {
+      showFloatbutton();
+    } else if (api.settings.get('floatButtonCorrection')) {
+      hideFloatbutton();
+    }
+    this.searchObj = searchObj;
   }
 
   async handlePage(curUrl = window.location.href) {
     this.resetPlayerError();
     let state: pageState;
     this.curState = undefined;
-    this.searchObj = undefined;
-    const This = this;
+    this.setSearchObj(undefined);
     this.url = curUrl;
     this.browsingtime = Date.now();
     let tempSingle;
+
+    this.videoSyncOffset = false;
+    clearTimeout(this.videoSyncInterval);
+    this.videoSyncInterval = setTimeout(() => {
+      this.videoSyncOffset = true;
+    }, 10000);
 
     if (this.page.isSyncPage(this.url)) {
       this.loadUI();
@@ -285,10 +289,8 @@ export class SyncPage {
         detectedEpisode: parseInt(`${this.page.sync.getEpisode(this.url)}`),
       };
 
-      this.searchObj = new SearchClass(
-        state.title,
-        this.novel ? 'novel' : this.page.type,
-        state.identifier,
+      this.setSearchObj(
+        new SearchClass(state.title, this.novel ? 'novel' : this.page.type, state.identifier),
       );
       this.searchObj.setPage(this.page);
       this.searchObj.setSyncPage(this);
@@ -335,11 +337,6 @@ export class SyncPage {
         });
       }
       logger.m('Sync', 'green').log(state);
-      bloodTrail({
-        category: 'info',
-        message: 'Sync',
-        data: state,
-      });
     } else {
       if (typeof this.page.overview === 'undefined') {
         logger.log('No overview definition');
@@ -356,10 +353,8 @@ export class SyncPage {
         identifier: this.page.overview.getIdentifier(this.url),
       };
 
-      this.searchObj = new SearchClass(
-        state.title,
-        this.novel ? 'novel' : this.page.type,
-        state.identifier,
+      this.setSearchObj(
+        new SearchClass(state.title, this.novel ? 'novel' : this.page.type, state.identifier),
       );
       this.searchObj.setPage(this.page);
       this.searchObj.setSyncPage(this);
@@ -377,15 +372,6 @@ export class SyncPage {
       }
 
       logger.m('Overview', 'green').log(state);
-      bloodTrail({
-        category: 'info',
-        message: 'Overview',
-        data: state,
-      });
-    }
-
-    if (!state.identifier || !state.title) {
-      Shark.captureException(new MissingDataError(this.page.name));
     }
 
     this.curState = state;
@@ -457,6 +443,7 @@ export class SyncPage {
         }
 
         if (await this.singleObj.checkSync(state.episode, state.volume)) {
+          await this.singleObj.lifeCycleHook('afterCheckSync');
           if (!(this.strongVolumes && !state.episode)) this.singleObj.setEpisode(state.episode);
           this.singleObj.setStreamingUrl(this.page.sync.getOverviewUrl(this.url));
 
@@ -474,111 +461,7 @@ export class SyncPage {
             this.checkForFiller(this.singleObj.getMalId(), this.singleObj.getEpisode());
           }
 
-          if (api.settings.get(`autoTrackingMode${this.page.type}`) === 'instant') {
-            setTimeout(() => {
-              sync();
-            }, api.settings.get('delay') * 1000);
-          } else {
-            const translationMsg = {
-              key: `syncPage_flashm_sync_${This.page.type}`,
-              value: String(state.episode),
-            };
-
-            if (This.page.type === 'manga' && !state.episode && state.volume) {
-              translationMsg.key = 'syncPage_flashm_sync_manga_volume';
-              translationMsg.value = String(state.volume);
-            }
-
-            let message = `<button class="sync" style="margin-bottom: 8px; background-color: transparent; border: none; color: rgb(255,64,129);margin-top: 10px;cursor: pointer;">${api.storage.lang(
-              translationMsg.key,
-              [providerTemplates(malUrl).shortName, translationMsg.value],
-            )}</button>`;
-            let options = {
-              hoverInfo: true,
-              error: true,
-              type: 'update',
-              minimized: false,
-            };
-
-            if (
-              api.settings.get(`autoTrackingMode${this.page.type}`) === 'video' &&
-              this.page.type === 'anime'
-            ) {
-              message = `
-                <div id="malSyncProgress" class="ms-loading" style="background-color: transparent; position: absolute; top: 0; left: 0; right: 0; height: 4px;">
-                  <div class="ms-progress" style="background-color: #2980b9; width: 0%; height: 100%; transition: width 1s;"></div>
-                </div>
-                <div class="player-error" style="display: none; position: absolute; left: 0; right: 0; padding: 5px; bottom: 100%; color: rgb(255,64,129); background-color: #323232;">
-                  <span class="player-error-default">${api.storage.lang(
-                    'syncPage_flash_player_error',
-                  )}</span>
-                  <span class="player-error-missing-permissions" style="display: none; padding-top: 10px">
-                    ${api.storage.lang('settings_custom_domains_missing_permissions_header')}
-                  </span>
-                  <div style="display: flex; justify-content: space-evenly">
-                    <a class="player-error-missing-permissions" href="https://malsync.moe/pwa#customDomains" style="display: none; margin: 10px; border-bottom: 2px solid #e13f7b;">
-                      ${api.storage.lang('Add')}
-                    </a>
-                    <a href="https://discord.com/invite/cTH4yaw" style="display: block; margin: 10px">Help</a>
-                  </div>
-
-                </div>
-              ${message}`;
-              options = {
-                hoverInfo: true,
-                error: false,
-                type: 'update',
-                minimized: true,
-              };
-            }
-
-            utils
-              .flashm(message, options)
-              .find('.sync')
-              .on('click', () => {
-                j.$('.flashinfo').remove();
-                sync();
-                this.resetPlayerError();
-              });
-
-            // Show error if no player gets detected for 5 minutes
-            if (this.singleObj.getType() === 'anime') {
-              playerTimeout = setTimeout(async () => {
-                j.$('#flashinfo-div').addClass('player-error');
-
-                if (await hasMissingPermissions()) {
-                  j.$('#flashinfo-div').addClass('player-error-missing-permissions');
-                }
-
-                const iframes = $('iframe')
-                  .toArray()
-                  .map(el => utils.absoluteLink($(el).attr('src'), window.location.origin))
-                  .filter(el => el)
-                  .filter(el => !isIframeUrl(el));
-
-                con.log('No Player found', iframes);
-
-                iframes.forEach(el => Shark.captureException(new MissingPlayerError(el!)));
-              }, 5 * 60 * 1000);
-            }
-
-            // Debugging
-            logger.log('overviewUrl', This.page.sync.getOverviewUrl(This.url));
-            if (typeof This.page.sync.nextEpUrl !== 'undefined') {
-              logger.log('nextEp', This.page.sync.nextEpUrl(This.url));
-            }
-          }
-
-          function sync() {
-            This.singleObj.setResumeWatching(This.url, state.episode);
-            if (typeof This.page.sync.nextEpUrl !== 'undefined') {
-              const continueWatching = This.page.sync.nextEpUrl(This.url);
-              if (continueWatching && !(continueWatching.indexOf('undefined') !== -1)) {
-                This.singleObj.setContinueWatching(continueWatching, state.episode! + 1);
-              }
-            }
-            This.syncHandling(true);
-          }
+          await this.startSyncHandling(state, malUrl);
         } else {
           logger.log('Nothing to Sync');
         }
@@ -586,6 +469,143 @@ export class SyncPage {
 
       await this.imageFallback();
     }
+  }
+
+  protected async startSyncHandling(state, malUrl) {
+    let mangaProgressMode = false;
+    if (this.mangaProgress) {
+      try {
+        mangaProgressMode = await this.mangaProgress.start();
+        if (!mangaProgressMode) return;
+      } catch (e) {
+        logger.error(e);
+      }
+    }
+
+    if (!mangaProgressMode && api.settings.get(`autoTrackingMode${this.page.type}`) === 'instant') {
+      setTimeout(
+        () => {
+          this.sync(state);
+        },
+        api.settings.get('delay') * 1000,
+      );
+    } else {
+      const translationMsg = {
+        key: `syncPage_flashm_sync_${this.page.type}`,
+        value: String(state.episode),
+      };
+
+      if (this.page.type === 'manga' && !state.episode && state.volume) {
+        translationMsg.key = 'syncPage_flashm_sync_manga_volume';
+        translationMsg.value = String(state.volume);
+      }
+
+      let message = `<button class="sync" style="margin-bottom: 8px; background-color: transparent; border: none; color: rgb(255,64,129);margin-top: 10px;cursor: pointer;">${api.storage.lang(
+        translationMsg.key,
+        [providerTemplates(malUrl).shortName, translationMsg.value],
+      )}</button>`;
+      let options = {
+        hoverInfo: true,
+        error: true,
+        type: 'update',
+        minimized: false,
+      };
+
+      if (
+        api.settings.get(`autoTrackingMode${this.page.type}`) === 'video' &&
+        this.page.type === 'anime'
+      ) {
+        message = `
+          <div id="malSyncProgress" class="ms-loading" style="background-color: transparent; position: absolute; top: 0; left: 0; right: 0; height: 4px;">
+            <div class="ms-progress" style="background-color: #2980b9; width: 0%; height: 100%; transition: width 1s;"></div>
+          </div>
+          <div class="player-error" style="display: none; position: absolute; left: 0; right: 0; padding: 5px; bottom: 100%; color: rgb(255,64,129); background-color: #323232;">
+            <span class="player-error-default">${api.storage.lang(
+              'syncPage_flash_player_error',
+            )}</span>
+            <span class="player-error-missing-permissions" style="display: none; padding-top: 10px">
+              ${api.storage.lang('settings_custom_domains_missing_permissions_header')}
+            </span>
+            <div style="display: flex; justify-content: space-evenly">
+              <a class="player-error-missing-permissions" href="https://malsync.moe/pwa/#/settings/customDomains" style="display: none; margin: 10px; border-bottom: 2px solid #e13f7b;">
+                ${api.storage.lang('Add')}
+              </a>
+              <a href="https://discord.com/invite/cTH4yaw" style="display: block; margin: 10px">Help</a>
+            </div>
+
+          </div>
+        ${message}`;
+        options = {
+          hoverInfo: true,
+          error: false,
+          type: 'update',
+          minimized: true,
+        };
+      }
+
+      if (mangaProgressMode) {
+        message = `
+          <div id="malSyncProgress" style="background-color: transparent; position: absolute; top: 0; left: 0; right: 0; height: 4px;">
+            <div class="ms-progress" style="background-color: #2980b9; width: 0%; height: 100%; transition: width 1s;"></div>
+          </div>
+        ${message}`;
+        options = {
+          hoverInfo: true,
+          error: false,
+          type: 'update',
+          minimized: true,
+        };
+      }
+
+      utils
+        .flashm(message, options)
+        .find('.sync')
+        .on('click', () => {
+          j.$('.flashinfo').remove();
+          this.sync(state);
+          this.resetPlayerError();
+        });
+
+      // Show error if no player gets detected for 5 minutes
+      if (this.singleObj.getType() === 'anime') {
+        playerTimeout = setTimeout(
+          async () => {
+            j.$('#flashinfo-div').addClass('player-error');
+
+            if (await hasMissingPermissions()) {
+              j.$('#flashinfo-div').addClass('player-error-missing-permissions');
+            }
+
+            const iframes = $('iframe')
+              .toArray()
+              .map(el => utils.absoluteLink($(el).attr('src'), window.location.origin))
+              .filter(el => el)
+              .filter(el => !isIframeUrl(el));
+
+            con.log('No Player found', iframes);
+          },
+          5 * 60 * 1000,
+        );
+      }
+
+      // Debugging
+      logger.log('overviewUrl', this.page.sync.getOverviewUrl(this.url));
+      if (typeof this.page.sync.nextEpUrl !== 'undefined') {
+        logger.log('nextEp', this.page.sync.nextEpUrl(this.url));
+      }
+    }
+  }
+
+  protected async sync(state) {
+    await this.singleObj.lifeCycleHook('beforeSync');
+    this.singleObj.setResumeWatching(this.url, state.episode);
+    if (typeof this.page.sync.nextEpUrl !== 'undefined') {
+      const continueWatching = this.page.sync.nextEpUrl(this.url);
+      if (continueWatching && !(continueWatching.indexOf('undefined') !== -1)) {
+        this.singleObj.setContinueWatching(continueWatching, state.episode! + 1);
+      }
+    }
+    this.syncHandling(true);
   }
 
   public resetPlayerError() {
@@ -751,7 +771,7 @@ export class SyncPage {
   }
 
   fillUI() {
-    j.$('.MalLogin').css('display', 'initial');
+    j.$('.MalLogin').css('display', '');
     j.$('#AddMalDiv, #LoginMalDiv').remove();
 
     j.$('#malRating').attr('href', this.singleObj.getDisplayUrl());
@@ -789,7 +809,7 @@ export class SyncPage {
       j.$('#malRating').after(
         j.html(
           `<span id='AddMalDiv'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href='#' id='AddMal' onclick='return false;'>${api.storage.lang(
-            `syncPage_malObj_addAnime`,
+            'syncPage_malObj_addAnime',
             [this.singleObj.shortName],
           )}</a></span>`,
         ),
@@ -850,6 +870,9 @@ export class SyncPage {
   handleList(searchCurrent = false, reTry = 0) {
     if (!this.singleObj) return; // Object not ready yet
     j.$('.mal-sync-active').removeClass('mal-sync-active');
+    j.$('[data-mal-sync-episode]').removeAttr('data-mal-sync-episode');
+    j.$('[data-mal-sync-episode-detected]').removeAttr('data-mal-sync-episode-detected');
+    j.$('[data-mal-sync-entry]').removeAttr('data-mal-sync-entry');
     if (
       typeof this.page.overview !== 'undefined' &&
       typeof this.page.overview.list !== 'undefined'
@@ -920,8 +943,29 @@ export class SyncPage {
 
       this.page.overview.list.elementsSelector().each(function (index, el) {
         try {
-          const elEp = parseInt(`${elementEp(j.$(el))}`) + parseInt(This.getOffset());
+          const epNumber = parseInt(`${elementEp(j.$(el))}`);
+
+          let offset = 0;
+          if (This.searchObj && This.searchObj.getRuledOffset(epNumber)) {
+            offset = Number(This.searchObj.getRuledOffset(epNumber));
+
+            const searchObjUrl = This.searchObj.getUrl();
+            const ruledUrl = This.searchObj.getRuledUrl(epNumber);
+
+            if (searchObjUrl !== ruledUrl) {
+              j.$(el).attr('data-mal-sync-entry', ruledUrl);
+              return;
+            }
+          }
+
+          const elEp = epNumber + offset;
           elementArray[elEp] = j.$(el);
+
+          j.$(el).attr('data-mal-sync-episode', elEp);
+          if (elEp !== epNumber) {
+            j.$(el).attr('data-mal-sync-episode-detected', epNumber);
+          }
+
           if (
             (api.settings.get('highlightAllEp') && elEp <= currentEpisode) ||
             elEp === currentEpisode
@@ -1028,7 +1072,7 @@ export class SyncPage {
     this.UILoaded = true;
     const wrapEnd = '</span>';
 
-    let ui = '<p id="malp">';
+    let ui = `<p id="malp" dir="${api.storage.langDirection()}">`;
     ui += `<span id="MalInfo">${api.storage.lang('Loading')}</span>`;
 
     ui +=
@@ -1176,9 +1220,12 @@ export class SyncPage {
 
         // Reset browsingTime if not in focus for more than 5 min
         clearTimeout(browsingTimeout);
-        browsingTimeout = setTimeout(() => {
-          this.browsingtime = undefined;
-        }, 5 * 60 * 1000);
+        browsingTimeout = setTimeout(
+          () => {
+            this.browsingtime = undefined;
+          },
+          5 * 60 * 1000,
+        );
         if (!this.browsingtime) this.browsingtime = Date.now();
 
         // Cover
@@ -1233,12 +1280,14 @@ export class SyncPage {
               largeImageKey: largeImageKeyTemp,
               largeImageText: largeImageTextTemp,
               instance: true,
+              type: 3,
             },
           };
 
           if (api.settings.get('presenceShowButtons')) {
-            let url = this.singleObj.getMalUrl();
-            if (!url && this.singleObj.shortName !== 'Local') url = this.singleObj.getDisplayUrl();
+            let url = null;
+            if (this.singleObj.shortName !== 'Local') url = this.singleObj.getDisplayUrl();
+            if (!url) url = this.singleObj.getMalUrl();
             if (!url && !presenceHidePage) url = this.singleObj.getStreamingUrl();
             if (url) {
               pres.presence.buttons = [
@@ -1277,6 +1326,7 @@ export class SyncPage {
                 const timeleft =
                   this.curState.lastVideoTime.duration - this.curState.lastVideoTime.current;
                 pres.presence.endTimestamp = Date.now() + timeleft * 1000;
+                pres.presence.startTimestamp = this.browsingtime;
                 pres.presence.smallImageKey = 'play';
                 pres.presence.smallImageText = 'Playing';
               }

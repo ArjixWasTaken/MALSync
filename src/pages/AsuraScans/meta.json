@@ -1,6 +1,12 @@
 {
-  "search": "https://www.asurascans.com/?s={searchtermPlus}",
+  "search": "https://asuracomics.com/?s={searchtermPlus}",
   "urls": {
-    "match": ["*://*.asurascans.com/*"]
+    "match": [
+      "*://asura.gg/*",
+      "*://*.asurascans.com/*",
+      "*://*.asuracomics.com/*",
+      "*://asuratoon.com/*",
+      "*://*.asuracomic.net/*"
+    ]
   }
 }

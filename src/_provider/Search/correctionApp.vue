@@ -1,5 +1,12 @@
 <template>
   <div v-if="syncPage" id="material">
+    <div class="m-s-pill-section">
+      <div class="m-s-pill">
+        <a href="https://malsync.moe/pwa/#/settings" target="_blank">
+          {{ lang('minimalApp_Settings') }}→
+        </a>
+      </div>
+    </div>
     <div v-if="syncMode && minimized">
       <a style="cursor: pointer" @click="minimized = false"> Action required </a>
     </div>
@@ -47,7 +54,7 @@
       <search
         :keyword="searchClass.getSanitizedTitel()"
         :type="searchClass.getNormalizedType()"
-        :sync-mode="syncMode"
+        :sync-mode="Boolean(syncMode)"
         :current-id="searchClass.getId()"
         @clicked="setPage($event.url, $event.id)"
       ></search>
@@ -61,6 +68,7 @@ import search from './components/search.vue';
 import inputButton from './components/inputButton.vue';
 import entry from './components/entry.vue';
 import rules from './components/rules.vue';
+import { hideFloatbutton, showFloatbutton } from '../../floatbutton/init';
 
 export default {
   components: {
@@ -70,10 +78,10 @@ export default {
     rules,
   },
   data: () => ({
-    inputOffset: 0,
+    inputOffset: 0 as number | '0',
     minimized: false,
     syncMode: null,
-    searchClass: null,
+    searchClass: null as any,
     unmountFnc: () => {
       // placeholder
     },
@@ -97,9 +105,11 @@ export default {
   },
   created() {
     this.minimized = api.settings.get('minimizeBigPopup');
+    if (api.settings.get('floatButtonCorrection')) hideFloatbutton(true);
   },
   unmounted() {
     this.unmountFnc();
+    showFloatbutton();
   },
   methods: {
     lang: api.storage.lang,

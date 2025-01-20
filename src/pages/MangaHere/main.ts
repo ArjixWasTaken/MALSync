@@ -59,6 +59,18 @@ export function getInter(): pageInterface {
         if (href) return utils.absoluteLink(href, thisSelf.domain);
         return '';
       },
+      readerConfig: [
+        {
+          current: {
+            selector: '.pager-list-left .active',
+            mode: 'text',
+          },
+          total: {
+            selector: '.pager-list-left [data-page]:nth-last-child(2)',
+            mode: 'text',
+          },
+        },
+      ],
     },
     overview: {
       getTitle(url) {
@@ -87,7 +99,7 @@ export function getInter(): pageInterface {
       api.storage.addStyle(
         require('!to-string-loader!css-loader!less-loader!./style.less').toString(),
       );
-      if (window.location.host.startsWith('m.')) {
+      if (window.location.host.startsWith('m.') || window.location.host.startsWith('newm.')) {
         con.error('Mobile version not supported');
         return;
       }

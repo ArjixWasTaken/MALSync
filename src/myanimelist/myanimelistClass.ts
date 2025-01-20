@@ -208,11 +208,20 @@ export class MyAnimeListClass {
     }
   }
 
+  getImage() {
+    return $('.leftside img').first().attr('src') || '';
+  }
+
+  getTitle() {
+    const title = $('meta[property="og:title"]').first().attr('content')!.trim() || '';
+    return title.replace(/(^watch|episode \d*$)/gi, '').trim();
+  }
+
   async malToKiss() {
     $(document).ready(() => {
       con.log('malToKiss');
 
-      const title = $('meta[property="og:title"]').first().attr('content')!.trim();
+      const title = this.getTitle();
 
       activeLinks(this.type!, this.id, title).then(links => {
         let html = '';
@@ -221,7 +230,7 @@ export class MyAnimeListClass {
           let tempHtml = '';
 
           page.links.forEach(stream => {
-            tempHtml += `<div class="mal_links"><a target="_blank" href="${stream.url}">${stream.name}</a></div>`;
+            tempHtml += `<div class="mal_links" style="word-break: break-all;"><a target="_blank" href="${stream.url}">${stream.name}</a></div>`;
           });
 
           html += `<h2 id="${page.name}Links" class="mal_links"><img src="${utils.favicon(
@@ -331,8 +340,8 @@ export class MyAnimeListClass {
     malObj.getPageRelations().forEach(page => {
       $('#horiznav_nav > ul').append(
         j.html(`
-          <li style="position: relative; width: 24px; display: inline-block;">
-            <a href="${page.link}" target="_blank" title="${page.name}" class="link" style="position: absolute; bottom: -3px; width: 16px; text-align: center;">
+          <li style="position: relative; height: 12px; display: inline-block;">
+            <a href="${page.link}" target="_blank" title="${page.name}" class="link" style="position: absolute; bottom: -5px; width: 16px; text-align: center;">
               <img src="${page.icon}" width="16" width="16">
             </a>
           </li>
@@ -502,7 +511,7 @@ export class MyAnimeListClass {
 
   related() {
     $(document).ready(function () {
-      $('.anime_detail_related_anime a').each(function () {
+      $('.related-entries .title a, .related-entries .entries a').each(function () {
         const el = $(this);
         const url = utils.absoluteLink(el.attr('href'), 'https://myanimelist.net');
         if (typeof url !== 'undefined') {
@@ -544,7 +553,7 @@ export class MyAnimeListClass {
   friendScore() {
     if (!api.settings.get('friendScore')) return;
     $(document).ready(function () {
-      const position = $('h2:contains(Reviews)');
+      const position = $('h2:contains(Reviews)').prev();
       if (!position.length) return;
 
       const overview = $('#horiznav_nav li a').first();
